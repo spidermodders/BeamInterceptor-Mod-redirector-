@@ -1,0 +1,19 @@
+{
+  "domElement": "<beam-regenerator></beam-regenerator>",
+  "name": "Carp Mod Menu",
+  "types": [
+    "ui.apps.categories.debug"
+  ],
+  "description": "An app that allows you to cheat in carp",
+  "css": {
+    "left": "20px",
+    "height": "220px",
+    "width": "330px",
+    "min-width": "330px",
+    "min-height": "220px",
+    "top": "100px"
+  },
+  "author": "coolcostupit",
+  "version": "0.1",
+  "directive": "beamRegenerator"
+}

@@ -1,0 +1,9 @@
+{
+    "bindings": [
+        {
+            "action":"toggleModMenu",
+            "control":"alt g"
+        }
+    ]
+}
+    

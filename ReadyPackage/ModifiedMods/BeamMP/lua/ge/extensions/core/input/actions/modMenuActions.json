@@ -1,0 +1,11 @@
+{
+    "toggleModMenu": {
+        "cat": "sslModMenu",
+        "order": 696969,
+        "ctx": "tlua",
+        "onUp": "if modmenumain then modmenumain.ToggleModMenu() end",
+        "isBasic": true,
+        "title": "Toggle the Mod-Menu UI",
+        "desc": "Hide/show the mod menu by triggering the keybind"
+    }
+}
