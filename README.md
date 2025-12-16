@@ -1,4 +1,4 @@
-# BeamInteceptor
+# BeamInterceptor
 BeammInterceptor is an open source tool that allows players to load mods outside off the default mod folder.
 
 # How does it work?
