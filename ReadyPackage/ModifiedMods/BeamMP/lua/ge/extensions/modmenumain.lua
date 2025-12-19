@@ -17,7 +17,7 @@ local HookingBeammp = false
 local BypassVehSpoofer = false
 local InjectingIntoCaRP = false
 local IsInCaRPServer = false
-local dprint = function()end
+local dprint = function(...)end
 
 -- Beammp hooks:
 local OriginalSendToServer
@@ -168,6 +168,41 @@ local function sendVehicleEditBypassed()
 	end
 end
 
+local function DumpTable(o)
+	if type(o) == 'table' then
+		dprint('{')
+		for k,v in pairs(o) do
+			if type(k) ~= 'number' then k = '"'..k..'"' end
+			dprint(' ['..k..'] = ')
+			DumpTable(v)
+		end
+		dprint('}')
+	else
+		dprint(tostring(o)..', ')
+	end
+end
+
+local function decodePacket(str)
+    local prefix, body = str:match("^(.-)(%{.*)$")
+
+    if not body then return end
+
+    local jsonString = body:gsub('=', ':')
+    local success, decodedTable = pcall(jsonDecode, jsonString)
+
+    if not success then
+        return nil
+    end
+    return decodedTable, prefix
+end
+
+local function encodePacket(tbl, prefix)
+    local jsonString = jsonEncode(tbl)
+    local customBody = jsonString:gsub(':', '=')
+
+    return prefix .. customBody
+end
+
 local function OnSendDataToServer(Data) -- string
 	if not M.SavingSettings.VehicleSpoofer then
 		if OriginalSendToServer then
@@ -178,17 +213,31 @@ local function OnSendDataToServer(Data) -- string
 
 		if ReplicationType ~= "Oc" then
 			if IsInCaRPServer and ReplicationType ~= "Zp" then
-				--print(Data)
 				if ReplicationType == "E:" then -- E: = CaRP client to server event
 					if Data:find("receiveHandleTeleport") then
 						return
 					elseif M.SavingSettings.PaxSpoofer and Data:find("paxMissionRequests") then
-						dprint("Original data:")
-						dprint(Data)
-						dprint("Modified data:")
-						local ModifiedData = spoofResetDuringMission(setPayload(Data, "paxMissionRequests", true), false)
-						dprint(ModifiedData)
-						return OriginalSendToServer(ModifiedData) -- Spoofing pax mission data packet
+						dprint("Spoofing Pax mission. Packet:")
+						local DecodedData, PacketPrefix = decodePacket(Data)
+						dprint("Packet end")
+
+						if DecodedData then
+							DumpTable(DecodedData)
+							local MissionRequests = DecodedData["passengerPayload"] and DecodedData["passengerPayload"]["paxMissionRequests"]
+							DecodedData.resetDuringMission = false
+
+							if MissionRequests then
+								for MissionName, Success in pairs(MissionRequests) do
+									dprint("["..MissionName.."] = "..tostring(Success))
+									if not Success then
+										dprint("Spoofed mission: "..MissionName)
+										MissionRequests[MissionName] = true
+									end
+								end
+							end
+
+							return OriginalSendToServer(encodePacket(DecodedData, PacketPrefix))
+						end
 					end
 				end
 			end
@@ -344,7 +393,7 @@ local function LoadUI()
 			Type = "checkbox",
 			State = M.SavingSettings.Autofarm,
 			DoNotRenderFunc = DoNotRenderCarpElements,
-			TextFunc = function() return "AI-Autofarm: " end,
+			TextFunc = function() return "AI-Autofarm (Autopilot): " end,
 			OnChange = function(newState)
 				M.SavingSettings.Autofarm = newState
 				IsSaveSynced = false
@@ -647,7 +696,7 @@ updateInfiniteFuel = function()
 			]])
 		end
 	end
-	ScheduledTasks.FuelTask = util.Scheduler.delayfunction(1, updateInfiniteFuel)
+	ScheduledTasks.FuelTask = util.Scheduler.delayfunction(0.05, updateInfiniteFuel)
 end
 
 updateAutofarm = function()
@@ -674,8 +723,6 @@ updateAutofarm = function()
 					--local targetPos = vec3(tonumber(]]..naviPos.x.."),tonumber("..naviPos.y.."),tonumber("..naviPos.z..[[));
 					currVeh:queueLuaCommand([[
 						local targetPos = "]]..nodes..[[";
-						print("Target pos: "..targetPos)
-						print(ai.manualTargetName)
 						if ai.mode ~= "manual" then
 							ai.setMode("manual");
 							ai.driveInLane("on");

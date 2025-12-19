@@ -12,6 +12,8 @@
 #include <windows.h>
 #include <libzippp\libzippp.h>
 #include <unordered_set>
+#include <string_view>
+#include <cctype>
 
 #include "Config.h" 
 #include "Console.h" 
@@ -19,6 +21,7 @@
 namespace fs = std::filesystem;
 using namespace libzippp;
 static std::unordered_set<std::string> g_cachedFolderMods;
+static std::unordered_map<std::string, bool> g_modPathCache;
 static bool g_cacheBuilt = false;
 
 std::string ConvertWideToNarrow(const std::wstring& wstr) {
@@ -62,6 +65,25 @@ std::string ExtractFilename(const std::string& path) {
     return path.substr(lastSlash + 1);
 }
 
+std::string_view ExtractFileNameNoExtension(std::string_view path) {
+    if (path.size() >= 4 && path.substr(0, 4) == "\\\\?\\") {
+        path.remove_prefix(4);
+    }
+
+    size_t lastSlash = path.find_last_of("/\\");
+    std::string_view filename =
+        (lastSlash == std::string_view::npos)
+        ? path
+        : path.substr(lastSlash + 1);
+
+    size_t lastDot = filename.find_last_of('.');
+    if (lastDot != std::string_view::npos) {
+        return filename.substr(0, lastDot);
+    }
+
+    return filename;
+}
+
 BOOL IsMainProcessByCmdLine() {
     LPCTSTR cmdLine = GetCommandLine();
     if (_tcsstr(cmdLine, TEXT("--type=")) != NULL) {
@@ -79,32 +101,59 @@ std::string GetDllDirectory(HMODULE hModule) {
     return str.substr(0, lastSlash);
 }
 
-// TODO: While this is the most reliable way, it is hella slow. Optimize in future!
-bool IsPathUnderModsDirectory(const std::string& path) {
-    std::string checkPath = path;
+static inline char ToLower(char c) {
+    return (c >= 'A' && c <= 'Z') ? (c + 32) : c;
+}
 
-    const std::string prefix = "\\\\?\\";
-    if (checkPath.size() >= prefix.size() && checkPath.substr(0, prefix.size()) == prefix) {
-        checkPath = checkPath.substr(prefix.size());
+bool IsPathUnderModsDirectoryCached(std::string_view path) {
+    auto it = g_modPathCache.find(std::string(path));
+    if (it != g_modPathCache.end())
+        return it->second;
+
+    bool result = IsPathUnderModsDirectory(path);
+    g_modPathCache.emplace(path, result);
+    return result;
+}
+
+bool IsPathUnderModsDirectory(std::string_view path) {
+    if (path.size() >= 4 && path.substr(0, 4) == "\\\\?\\") {
+        path.remove_prefix(4);
     }
 
-    std::string normalizedPath = checkPath;
-    std::replace(normalizedPath.begin(), normalizedPath.end(), '\\', '/');
+    size_t segmentStart = 0;
+    bool inMods = false;
+    int depthAfterMods = 0;
 
-    std::transform(normalizedPath.begin(), normalizedPath.end(), normalizedPath.begin(), ::tolower);
+    for (size_t i = 0; i <= path.size(); ++i) {
+        if (i == path.size() || path[i] == '\\' || path[i] == '/') {
+            size_t len = i - segmentStart;
 
-    if (normalizedPath.find("/mods/") != std::string::npos) {
-        return true;
+            if (!inMods) {
+                if (len == 4 &&
+                    ToLower(path[segmentStart + 0]) == 'm' &&
+                    ToLower(path[segmentStart + 1]) == 'o' &&
+                    ToLower(path[segmentStart + 2]) == 'd' &&
+                    ToLower(path[segmentStart + 3]) == 's')
+                {
+                    inMods = true;
+                    depthAfterMods = 0;
+                }
+            }
+            else {
+                if (len > 0) {
+                    depthAfterMods++;
+                    if (depthAfterMods > 2) {
+                        return false;
+                    }
+                }
+            }
+
+            segmentStart = i + 1;
+        }
     }
 
-    if (normalizedPath.find("/mods") != std::string::npos &&
-        (normalizedPath.find("*.*") != std::string::npos || normalizedPath.find("*.zip") != std::string::npos)
-        )
-    {
-        return true;
-    }
-
-    return false;
+    // Valid only if we found mods AND depth is 1 or 2
+    return inMods && (depthAfterMods == 1 || depthAfterMods == 2);
 }
 
 // --- ZIP Manipulation Core Functions ---
@@ -170,7 +219,7 @@ static fs::path GetDatetimeFilePath(const fs::path& filePath) {
     return redirectRoot / (filePath.filename().string() + ".datetime");
 }
 
-bool isFileOutdated(const std::string& filePath)
+bool isFileOutdated(std::string_view filePath)
 {
     try {
         fs::path targetFile(filePath);

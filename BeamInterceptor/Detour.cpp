@@ -28,25 +28,30 @@ HANDLE WINAPI DetourCreateFileW(
     std::string originalPath = ConvertWideToNarrow(wsFileName);
     std::string filenameOnly = ExtractFilename(originalPath);
 
-    if (Config::settings.enabled && IsPathUnderModsDirectory(originalPath)) {
-        if (hasGenMap(originalPath) && isFileOutdated(originalPath)) {
+    if (Config::settings.enabled && IsPathUnderModsDirectoryCached(originalPath)) {
 
-            if (Config::settings.debugInterception) {
-                Console::Print("[MOD INTERCEPTOR] Compiling: " + filenameOnly);
-                Console::Print("[MOD INTERCEPTOR] SOURCE DIR: " + Config::settings.redirectModPath + "\\" + NormalizeModName(originalPath));
+        if (hasGenMap(originalPath)) {
+            std::string_view baseNameView = ExtractFileNameNoExtension(filenameOnly);
+            std::string baseName(baseNameView);
+            const std::string genMapPath = Config::settings.redirectModPath + "\\" + baseName;
+
+            if (isFileOutdated(originalPath) || isFileOutdated(genMapPath)) {
+                if (Config::settings.debugInterception) {
+                    Console::Print("[MOD INTERCEPTOR] Compiling: " + filenameOnly);
+                    Console::Print("[MOD INTERCEPTOR] SOURCE DIR: " + Config::settings.redirectModPath + "\\" + NormalizeModName(originalPath));
+                }
+
+                updateFiledate(originalPath);
+                updateFiledate(genMapPath);
+
+                MergeFolderWithZip(originalPath, Config::settings.redirectModPath + "\\" + NormalizeModName(originalPath), Config::settings.redirectModPath);
+
+                if (Config::settings.debugInterception) {
+                    Console::Print("[MOD INTERCEPTOR] Compiling completed at: " + Config::settings.redirectModPath + "\\" + filenameOnly);
+                }
             }
-
-            updateFiledate(originalPath);
-            MergeFolderWithZip(originalPath, Config::settings.redirectModPath + "\\" + NormalizeModName(originalPath), Config::settings.redirectModPath);
-
-            if (Config::settings.debugInterception) {
-                Console::Print("[MOD INTERCEPTOR] Compiling completed at: " + Config::settings.redirectModPath + "\\" + filenameOnly);
-            }
-
         }
-    }
 
-    if (Config::settings.enabled && IsPathUnderModsDirectory(originalPath)) {
         std::string redirectZipPath = Config::settings.redirectModPath + "\\" + filenameOnly;
 
         if (filenameOnly.size() > 4 &&

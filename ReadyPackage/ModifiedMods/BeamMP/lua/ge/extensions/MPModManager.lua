@@ -1,7 +1,6 @@
---====================================================================================
--- All work by Titch2000 and jojos38.
--- You have no permission to edit, redistribute or upload. Contact BeamMP for more info!
---====================================================================================
+-- Copyright (C) 2024 BeamMP Ltd., BeamMP team and contributors.
+-- Licensed under AGPL-3.0 (or later), see <https://www.gnu.org/licenses/>.
+-- SPDX-License-Identifier: AGPL-3.0-or-later
 
 --- MPModManager API.
 --- Author of this documentation is Titch
@@ -13,6 +12,7 @@ local M = {}
 local serverMods = {} -- multiplayerModName1, multiplayerModName2
 local whitelist = {"multiplayerbeammp", "beammp", "translations"} -- these mods won't be activated or deactivated
 local hasMods = false
+local deactivateMod = core_modmanager.deactivateMod
 
 --TODO: build handler for repo mod downloads
 
@@ -23,14 +23,14 @@ function queueExtensionToLoad(extension)  -- temporary workaround for mods still
 end
 
 
-local function unloadLocales()
-	FS:unmount('/temp/beammp/beammp_locales.zip')
+local function unloadLocalesAndDefaults()
+	FS:unmount('/temp/beammp/beammp_locales_and_defaults.zip')
 	FS:directoryRemove('/temp/beammp')
 end
 
---- Load the BeamMP provided locales and merge them into a working set for BeamNG
-local function loadLocales() -- loads beammp locales without having to directly replace the game locales
-	unloadLocales()
+--- Load the BeamMP provided locales + defalts and merge them into a working set for BeamNG
+local function loadLocalesAndDefaults() -- loads beammp locales and default settings without having to directly replace the game locales and default settings
+	unloadLocalesAndDefaults()
 	local mp_locales = FS:findFiles('/mp_locales/', '*.json', 0)
 	local game_locales = FS:findFiles('/locales/', '*.json', 0)
 
@@ -38,22 +38,30 @@ local function loadLocales() -- loads beammp locales without having to directly 
 		for _, game_locale in pairs(game_locales) do
 			if game_locale:gsub('/locales/', '') == mp_locale:gsub('/mp_locales/', '') then
 				local merged_locale = tableMergeRecursive(jsonReadFile(game_locale), jsonReadFile(mp_locale))
-				log('M', 'loadLocales', 'Writing '..game_locale)
+				log('M', 'loadLocalesAndDefaults', 'Writing '..game_locale)
 				jsonWriteFile('/temp/beammp/'.. game_locale, merged_locale, true)
 			end
 		end
 	end
+
+	local merged_settings = tableMergeRecursive(jsonReadFile('/settings/defaults.json'), jsonReadFile('/settings/mp_defaults.json'))
+	log('M', 'loadLocalesAndDefaults', 'Writing /settings/defaults.json')
+	jsonWriteFile('/temp/beammp/settings/defaults.json', merged_settings, true)
+
 	if FS:directoryExists('/temp/beammp/locales/') then
 		local zip = ZipArchive()
 		local fileList = FS:findFiles('/temp/beammp/locales/', '*.json', 0)
-		zip:openArchiveName('temp/beammp/beammp_locales.zip', 'w')
+		zip:openArchiveName('temp/beammp/beammp_locales_and_defaults.zip', 'w')
 		for _, file in pairs(fileList) do
 			zip:addFile(file, 'locales/'..file:gsub('/temp/beammp/locales/', ''))
 		end
+		
+		zip:addFile('/temp/beammp/settings/defaults.json', 'settings/defaults.json')
 		zip:close()
 	end
-	FS:mount('/temp/beammp/beammp_locales.zip')
+	FS:mount('/temp/beammp/beammp_locales_and_defaults.zip')
 	FS:directoryRemove('/temp/beammp/locales')
+	FS:directoryRemove('/temp/beammp/settings')
 end
 
 --- Check if a mod is allowed according to the servers mods
@@ -92,6 +100,11 @@ local function checkMod(mod) --TODO: might have a flaw with repo mods as their n
 	if modWhitelisted then return end -- don't do anything with whitelisted mods
 
 	if not modAllowed and mod.active then
+		log('W', 'checkMod', "This mod should not be running: "..modname)
+		if mod.dirname == '/mods/multiplayer/' then
+			deactivateMod(modname)
+			core_modmanager.deleteMod(modname)
+		end
 	elseif modAllowed and not mod.active then
 		log('W', 'checkMod', 'Inactive Mod but Should be Active: '..modname)
 		core_modmanager.activateMod(modname)--'/mods/'..string.lower(v)..'.zip')
@@ -256,7 +269,27 @@ end
 --- Triggered by BeamNG when the lua mod is loaded by the modmanager system.
 -- We use this to load our locales, cleanup the mods ahead of mp use and ensure our modloader is used
 local function onExtensionLoaded()
-	loadLocales()
+	if VersionCheck then
+		VersionCheck.onInit = function()
+			local modLocation = FS:findOverrides("lua/ge/extensions/VersionCheck.lua")[1]
+			local message = "."
+			if modLocation ~= nil then
+				message = ", the mod is located at: " .. modLocation
+			end
+			core_jobsystem.create(function(job)
+				job.sleep(8)
+				guihooks.trigger("toastrMsg", {type="error", title="BeamMP has detected an incompatible mod", msg="Possibly broken lua code has been found and disabled" .. message, config={closeButton=true, timeOut=0, extendedTimeOut=0}}) 
+			end)
+			print("Possibly malicous lua code has been found and disabled" .. message)
+		end
+	end
+
+	log('I', 'onExtensionLoaded','Amount of files in content/vehicles/: ' .. tostring(#FS:directoryList("/content/vehicles/")))
+	log('I', 'onExtensionLoaded','Amount of files in content/levels/: ' .. tostring(#FS:directoryList("/content/levels/")))
+	log('I', 'onExtensionLoaded','Amount of files in content/: ' .. tostring(#FS:directoryList("/content/")))
+	extensions.printExtensions()
+
+	loadLocalesAndDefaults()
 	cleanUpSessionMods()
 	--extensionLoader()
 	--M.replaceStuff()
@@ -265,7 +298,7 @@ end
 --- Triggered by BeamNG when the lua mod is unloaded by the modmanager system.
 -- We use this to cleanup our locales and restore core module defintions
 local function onExtensionUnloaded() -- restore functions back to their default values
-	unloadLocales()
+	unloadLocalesAndDefaults()
 	--registerCoreModule = original_registerCoreModule and original_registerCoreModule
 	if core_repository then core_repository.modUnsubscribe = original_Unsubscribe and original_Unsubscribe end
 end

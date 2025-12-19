@@ -4,8 +4,8 @@
 
 namespace Config {
     struct Settings {
-        bool showConsole = true;
-        bool debugInterception = true;
+        bool showConsole = false;
+        bool debugInterception = false;
         std::string modDir;
         bool enabled = true;
         std::string dllDirectory;
