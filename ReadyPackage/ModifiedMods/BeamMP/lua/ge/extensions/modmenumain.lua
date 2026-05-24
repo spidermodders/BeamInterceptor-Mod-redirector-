@@ -17,12 +17,17 @@ local HookingBeammp = false
 local BypassVehSpoofer = false
 local InjectingIntoCaRP = false
 local IsInCaRPServer = false
+local RealVehicleName = nil
+local CurrentVehicleID = nil
+local PositionSpoofTask = nil
+local CurrentTargetPos = nil
 local dprint = function(...)end
 
 -- Beammp hooks:
 local OriginalSendToServer
 local OriginalOnVehResetVehCaRP
 local OriginalOnVehResetMainCaRP
+local OriginalOnVehResetBeamMP
 
 -- TODO:
 -- complete autofarm system
@@ -102,6 +107,37 @@ getHardwareID = function() -- Overwrite global function
 	return M.SavingSettings.CurrentHwid
 end
 
+local function getNearestContact()
+	local group = scenetree and scenetree.CarpcontactTriggersGroup
+
+	if not group then
+		return
+	end
+
+	local playerVehicle = be:getPlayerVehicle(0)
+
+	if not playerVehicle then
+		return
+	end
+
+	local triggers = group:getObjects()
+	local playerVehiclePosition = playerVehicle:getPosition()
+	local shortestDistance = nil
+	local NearestContact
+
+  	for _, name in pairs(triggers) do
+		local Location = group:findObject(name)
+		local CurrentDistance = M.CalculateDistance(Location:getPosition(), playerVehiclePosition)
+
+		if not shortestDistance or CurrentDistance < shortestDistance then
+			shortestDistance = CurrentDistance
+			NearestContact = Location
+		end
+  	end
+
+	return NearestContact
+end
+
 local function settingsLoad()
 	local storedSettings = jsonReadFile(settingsPath)
 	if storedSettings then
@@ -132,53 +168,36 @@ local function getCharacters(str, characters)
 	return string.sub(str, 1, characters)
 end
 
-local function setPayload(Data, PayloadName, State)
-    local boolStr = tostring(State)
-    local fullPattern = '("'..PayloadName..'"%s*=%s*{)(.-)(})'
-    local start, inside, close = Data:match(fullPattern)
-    if not inside then return Data end
-
-    local updatedInside = inside:gsub('("[^"]+"%s*=)%s*%a+', '%1' .. boolStr)
-    local replaced = start .. updatedInside .. close
-
-    return Data:gsub(fullPattern, replaced, 1)
-end
-
-local function spoofResetDuringMission(dataStr, boolVal)
-    if type(dataStr) ~= "string" or type(boolVal) ~= "boolean" then
-        return dataStr
-    end
-
-    local boolStr = tostring(boolVal) -- "true" or "false"
-
-    -- Only modify if the key exists
-    local modified, count = dataStr:gsub('"resetDuringMission"=false', '"resetDuringMission"=' .. boolStr, 1)
-    if count == 0 then
-        modified, count = dataStr:gsub('"resetDuringMission"=true', '"resetDuringMission"=' .. boolStr, 1)
-    end
-
-    return modified
-end
-
 local function sendVehicleEditBypassed()
 	local vehicleID = be and be:getPlayerVehicleID(0)
 	if vehicleID and vehicleID ~= -1 and MPVehicleGE and MPVehicleGE.sendVehicleEdit then
 		BypassVehSpoofer = true
+		CurrentVehicleID = vehicleID
+		M.updateVehicleName(vehicleID)
 		MPVehicleGE.sendVehicleEdit(vehicleID)
 	end
 end
 
-local function DumpTable(o)
-	if type(o) == 'table' then
-		dprint('{')
-		for k,v in pairs(o) do
-			if type(k) ~= 'number' then k = '"'..k..'"' end
-			dprint(' ['..k..'] = ')
-			DumpTable(v)
-		end
-		dprint('}')
-	else
-		dprint(tostring(o)..', ')
+local function DumpTable(o) 
+	if type(o) == 'table' then 
+		dprint('{') 
+		for k,v in pairs(o) do 
+			if type(k) ~= 'number' then k = '"'..k..'"' end 
+			dprint(' ['..k..'] = ') 
+			DumpTable(v) 
+		end 
+		dprint('}') 
+	else 
+		dprint(tostring(o)..', ') 
+	end 
+end 
+
+local function getVehicleName(Vehicle) 
+	local vehKey = Vehicle.JBeam
+	local vehMainInfo = core_vehicles.getModel(vehKey)
+
+	if vehMainInfo then
+		return (vehMainInfo.model["Brand"] and vehMainInfo.model["Brand"].." " or "")..(vehMainInfo.model["Name"] or vehKey)
 	end
 end
 
@@ -212,34 +231,46 @@ local function OnSendDataToServer(Data) -- string
 		local ReplicationType = getCharacters(Data, 2)
 
 		if ReplicationType ~= "Oc" then
-			if IsInCaRPServer and ReplicationType ~= "Zp" then
-				if ReplicationType == "E:" then -- E: = CaRP client to server event
-					if Data:find("receiveHandleTeleport") then
-						return
-					elseif M.SavingSettings.PaxSpoofer and Data:find("paxMissionRequests") then
-						dprint("Spoofing Pax mission. Packet:")
-						local DecodedData, PacketPrefix = decodePacket(Data)
-						dprint("Packet end")
+			if ReplicationType ~= "Zp" then
+				if IsInCaRPServer then
+					if ReplicationType == "E:" then -- E: = CaRP client to server event
+						if Data:find("receiveHandleTeleport") then
+							return
+						elseif CurrentTargetPos and Data:find("receiveHandlePlayerGetPosition") then
+							local DecodedData, PacketPrefix = decodePacket(Data)
 
-						if DecodedData then
-							DumpTable(DecodedData)
-							local MissionRequests = DecodedData["passengerPayload"] and DecodedData["passengerPayload"]["paxMissionRequests"]
-							DecodedData.resetDuringMission = false
+							if DecodedData then
+								DecodedData["x"] = CurrentTargetPos[1]
+								DecodedData["y"] = CurrentTargetPos[2]
+								DecodedData["z"] = CurrentTargetPos[3]
+								return OriginalSendToServer(encodePacket(DecodedData, PacketPrefix))
+							end
+						elseif M.SavingSettings.PaxSpoofer and Data:find("paxMissionRequests") then
+							local DecodedData, PacketPrefix = decodePacket(Data)
 
-							if MissionRequests then
-								for MissionName, Success in pairs(MissionRequests) do
-									dprint("["..MissionName.."] = "..tostring(Success))
-									if not Success then
-										dprint("Spoofed mission: "..MissionName)
-										MissionRequests[MissionName] = true
+							if DecodedData then
+								local MissionRequests = DecodedData["passengerPayload"] and DecodedData["passengerPayload"]["paxMissionRequests"]
+								DecodedData.resetDuringMission = false
+
+								if MissionRequests then
+									for MissionName, Success in pairs(MissionRequests) do
+										dprint("["..MissionName.."] = "..tostring(Success))
+										if not Success then
+											dprint("Spoofed mission: "..MissionName)
+											MissionRequests[MissionName] = true
+										end
 									end
 								end
-							end
 
-							return OriginalSendToServer(encodePacket(DecodedData, PacketPrefix))
+								return OriginalSendToServer(encodePacket(DecodedData, PacketPrefix))
+							end
 						end
 					end
 				end
+			elseif CurrentTargetPos then -- Zp = replicate vehicle position and velocity
+				local DecodedData, PacketPrefix = decodePacket(Data)
+				DecodedData["pos"] = CurrentTargetPos
+				return OriginalSendToServer(encodePacket(DecodedData, PacketPrefix))
 			end
 			OriginalSendToServer(Data)
 		elseif BypassVehSpoofer then
@@ -262,27 +293,38 @@ local function OnCarpVehResetMain(vehID, other)
 	end
 end
 
+local function OnBeamMPVehReset(...)
+	if M.SavingSettings.FreeRepairs == false then
+		return OriginalOnVehResetBeamMP(...)
+	end
+end
+
 local function InjectIntoBeammp()
 	if not HookingBeammp then
 		HookingBeammp = true
 		util.Hooker.HookFunction("MPGameNetwork", "send", 1, OnSendDataToServer, function(OriginalSendFunc)
 			OriginalSendToServer = OriginalSendFunc
-			print("Network spoofer injected into Beammp!")
+			dprint("Network spoofer injected into Beammp!")
+		end, true)
+
+		util.Hooker.HookFunction("MPVehicleGE", "onVehicleResetted", 1, OnBeamMPVehReset, function(OriginalFunction)
+			OriginalOnVehResetBeamMP = OriginalFunction
+			dprint("Injected into MPVehicleGE!")
 		end, true)
 	end
 	if not InjectingIntoCaRP and CurrentServer and CurrentServer.name and string.find(string.lower(CurrentServer.name), "carp") then
 		InjectingIntoCaRP = true
 		IsInCaRPServer = true
-		print("Injecting into CaRP...")
+		dprint("Injecting into CaRP...")
 
 		util.Hooker.HookFunction("carp_vehicle", "onVehicleResetted", 1, OnCarpResetVeh, function(OriginalResetFunc)
 			OriginalOnVehResetVehCaRP = OriginalResetFunc
-			print("Respawn spoofer injected into CaRP-Veh!")
+			dprint("Respawn spoofer injected into CaRP-Veh!")
 		end, true)
 
 		util.Hooker.HookFunction("carp", "onVehicleResetted", 1, OnCarpVehResetMain, function(OriginalResetFunc)
 			OriginalOnVehResetMainCaRP = OriginalResetFunc
-			print("Respawn spoofer injected into CaRP-Lua!")
+			dprint("Respawn spoofer injected into CaRP-Lua!")
 		end, true)
 
 	end
@@ -295,6 +337,35 @@ local function CleanupInjector()
 		OriginalOnVehResetVehCaRP = nil
 		OriginalOnVehResetMainCaRP = nil
 	end
+	RealVehicleName = nil
+	PositionSpoofTask = nil
+end
+
+local function TriggerEkey(State)
+	if carp then carp.ePress(be:getPlayerVehicle(0):getID(), State) end
+end
+
+-- Equals: ServerTP
+local function SpoofServerPosition(NewPosition)
+	if PositionSpoofTask then
+		util.Scheduler.avoidFunction(PositionSpoofTask)
+		PositionSpoofTask = nil
+	end
+	
+	if type(NewPosition) == "table" then
+		CurrentTargetPos = {
+			tonumber(NewPosition[1]),
+			tonumber(NewPosition[2]),
+			tonumber(NewPosition[3])
+		}
+	else
+		CurrentTargetPos = {NewPosition.x, NewPosition.y, NewPosition.z}
+	end
+
+	PositionSpoofTask = util.Scheduler.delayfunction(0.01, function()
+		CurrentTargetPos = nil
+		PositionSpoofTask = nil
+	end)
 end
 
 local function LoadUI()
@@ -314,8 +385,32 @@ local function LoadUI()
 		{
 			Type = "button",
 			DoNotRenderFunc = DoNotRenderCarpElements,
-			TextFunc = function() return "Skip mission" end,
+			TextFunc = function() return "Skip mission (DETECTABLE!)" end,
 			OnClick = function()
+				if carp then
+					local Mission = carp.getCurrentMission()
+					if Mission then
+						local MissionCoords = util.SimpleTables.stringToTable(Mission.destinationCoords, "|")
+						if MissionCoords then
+							SpoofServerPosition(MissionCoords)
+							TriggerEkey(true)
+						end
+					end
+				end
+			end
+		},
+		{
+			Type = "button",
+			DoNotRenderFunc = DoNotRenderCarpElements,
+			TextFunc = function() return "Get mission" end,
+			OnClick = function()
+				if carp then
+					local Location = getNearestContact()
+					if Location then
+						SpoofServerPosition(Location:getPosition())
+						TriggerEkey(true)
+					end
+				end
 			end
 		},
 		{
@@ -371,7 +466,7 @@ local function LoadUI()
 		{
 			Type = "checkbox",
 			State = M.SavingSettings.VehicleSpoofer,
-			TextFunc = function() return "VehicleSpoofer: " end,
+			TextFunc = function() return "Vehicle Spoofer: " end,
 			OnChange = function(newState)
 				M.SavingSettings.VehicleSpoofer = newState
 				IsSaveSynced = false
@@ -517,6 +612,18 @@ local function LoadUI()
 			end
 		},
 		{
+			Name = "RealVehicle",
+			Type = "label",
+			DoNotRenderFunc = function()
+				if not CurrentServer or not M.SavingSettings.VehicleSpoofer then
+					return true
+				end
+			end,
+			TextFunc = function()
+				return "Current real Vehicle: "..(RealVehicleName or "Unknown")
+			end,
+		},
+		{
 			Type = "label",
 			DoNotRenderFunc = DoNotRenderCarpElements,
 			TextFunc = function() return "Autofarm status: "..M.GlobalSettings.AutoFarmMode end
@@ -599,16 +706,30 @@ local function getCurrentServer()
 	return MPCoreNetwork and MPCoreNetwork.getCurrentServer()
 end
 
-local function GetPlayerByID(ID)
-	return MPVehicleGE and MPVehicleGE.getPlayers()[ID]
+local function GetPlayerByID(ID) 
+	return MPVehicleGE and MPVehicleGE.getPlayers()[ID] 
+end 
+
+local function updateVehicleName(vehicleID)
+	local Vehicle = vehicleID and be:getObjectByID(vehicleID) or be:getPlayerVehicle(0)
+	if Vehicle then
+		RealVehicleName = getVehicleName(Vehicle)
+	else
+		RealVehicleName = nil
+	end
 end
 
 local function onVehicleSpawned(gameVehicleID)
-	--[[
-	print("registered car with the game id: "..gameVehicleID)
-	local veh = be:getObjectByID(gameVehicleID)
-	veh:queueLuaCommand("extensions.modmenu.onInit()")
-	]]
+	if not CurrentVehicleID and MPVehicleGE and MPVehicleGE.isOwn(gameVehicleID) then
+		CurrentVehicleID = gameVehicleID
+		updateVehicleName(gameVehicleID)
+	end
+end
+
+local function onVehicleDestroyed(gameVehicleID)
+	if CurrentVehicleID == gameVehicleID then
+		RealVehicleName = nil
+	end
 end
 
 local function getNaviPos()
@@ -621,116 +742,41 @@ local function getNaviPos()
 	end
 end
 
--- For Carp mod menu: teleport player to active map / nav marker (self-contained, no extra UI apps)
-local function toVec3ForMarkerTeleport(v)
-	if not v then
-		return nil
-	end
-	local t = type(v)
-	if t == "userdata" then
-		return v
-	end
-	if t == "cdata" then
-		local okX, x = pcall(function() return v.x end)
-		local okY, y = pcall(function() return v.y end)
-		local okZ, z = pcall(function() return v.z end)
-		if okX and okY and okZ and x and y and z then
-			return vec3(x, y, z)
-		end
-		return nil
-	end
-	if t == "string" then
-		local mapData = map and map.getMap and map.getMap()
-		local node = mapData and mapData.nodes and mapData.nodes[v]
-		return node and node.pos or nil
-	end
-	if t == "table" then
-		if v.pos then
-			return toVec3ForMarkerTeleport(v.pos)
-		end
-		if v.x and v.y and v.z then
-			return vec3(v.x, v.y, v.z)
-		end
-		if #v >= 3 then
-			return vec3(v[1], v[2], v[3])
-		end
-	end
-	return nil
-end
-
-local function teleportToMapMarker()
-	if not (core_groundMarkers and core_groundMarkers.getTargetPos) then
-		return "no_marker_api"
-	end
-	local veh = be:getPlayerVehicle(0)
-	if not veh then
-		return "no_vehicle"
-	end
-	local target = core_groundMarkers.getTargetPos()
-	if not target and core_groundMarkers.endWP and core_groundMarkers.endWP[1] then
-		target = core_groundMarkers.endWP[1]
-	end
-	if not target then
-		return "no_target"
-	end
-	local targetPos = toVec3ForMarkerTeleport(target)
-	if not targetPos then
-		return "invalid_target_type:" .. tostring(type(target))
-	end
-	local x, y, z = targetPos.x, targetPos.y, targetPos.z
-	local zGround = z
-	local hit = Engine.castRay(vec3(x, y, 99999), vec3(x, y, -99999), true, true)
-	if hit and hit.pt then
-		zGround = hit.pt.z
-	end
-	local ok, err = pcall(function()
-		veh:setPositionNoPhysicsReset(vec3(x, y, zGround))
-	end)
-	if not ok then
-		return "setpos_error:" .. tostring(err)
-	end
-	return "ok"
-end
-
 local function RecieveAiMode(AiMode)
 	M.GlobalSettings.AiMode = AiMode
 end
 
 local function getSpectators()
-	local spectators = {}
+	local spectators = {} 
 
-	if MPVehicleGE then
-		local Veh = be:getPlayerVehicle(0)
-		if Veh then
-			local VehID = Veh:getID()
-			local VehData = MPVehicleGE.getVehicleByGameID(VehID)
+	if MPVehicleGE then 
+		local Veh = be:getPlayerVehicle(0) 
+		if Veh then 
+			local VehID = Veh:getID() 
+			local VehData = MPVehicleGE.getVehicleByGameID(VehID) 
 			
-			if VehData then
-				local VehOwner = VehData.ownerName
+			if VehData then 
+				local VehOwner = VehData.ownerName 
 				
-				if VehOwner then
-					for playerName, playerVariables in pairs(MPVehicleGE.getPlayerByName(VehOwner).vehicles) do
-						for variableName, variableValue in pairs(playerVariables) do
-							for PlayerID, isValid in pairs(playerVariables.spectators) do
-							
-								local SpectatingPlayer = GetPlayerByID(PlayerID).name
-		
-								if SpectatingPlayer ~= VehOwner then
-									spectators[SpectatingPlayer] = true
-								end
-							end
-						end
-					end
-				end
-			end
-		end
-	end
+				if VehOwner then 
+					for playerName, playerVariables in pairs(MPVehicleGE.getPlayerByName(VehOwner).vehicles) do 
+						for PlayerID, isValid in pairs(playerVariables.spectators) do 
+							local SpectatingPlayer = GetPlayerByID(PlayerID).name 
+							if SpectatingPlayer ~= VehOwner then 
+								spectators[SpectatingPlayer] = true 
+							end 
+						end 
+					end 
+				end 
+			end 
+		end 
+	end 
 
-	local ComputedString = ""
+	local ComputedString = "" 
 
-	for plrName,_ in pairs(spectators) do
-		ComputedString = ComputedString == "" and plrName or ComputedString .. ", " .. plrName
-	end
+	for plrName,_ in pairs(spectators) do 
+		ComputedString = ComputedString == "" and plrName or ComputedString .. ", " .. plrName 
+	end 
 
 	return ComputedString
 end
@@ -824,14 +870,15 @@ end
 -- Exports:
 M.onDisconnect = CleanupInjector
 M.onWorldReadyState = InjectIntoBeammp
-M.onVehicleReady = onVehicleSpawned
 M.onVehicleSpawned = onVehicleSpawned
+M.onVehicleDestroyed = onVehicleDestroyed
 M.onExtensionLoaded = initModMenu -- Top 1 worst mod systems: BeamNG Drive
 M.onExtensionUnloaded = uninitModMenu
 M.onModDeactivated = uninitModMenu
 M.onModActivated = initModMenu
 M.RecieveAiMode = RecieveAiMode
 M.ToggleModMenu = ToggleModMenu
-M.teleportToMapMarker = teleportToMapMarker
+M.updateVehicleName = updateVehicleName
+M.CalculateDistance = CalculateDistance
 
 return M
