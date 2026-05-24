@@ -621,6 +621,77 @@ local function getNaviPos()
 	end
 end
 
+-- For Carp mod menu: teleport player to active map / nav marker (self-contained, no extra UI apps)
+local function toVec3ForMarkerTeleport(v)
+	if not v then
+		return nil
+	end
+	local t = type(v)
+	if t == "userdata" then
+		return v
+	end
+	if t == "cdata" then
+		local okX, x = pcall(function() return v.x end)
+		local okY, y = pcall(function() return v.y end)
+		local okZ, z = pcall(function() return v.z end)
+		if okX and okY and okZ and x and y and z then
+			return vec3(x, y, z)
+		end
+		return nil
+	end
+	if t == "string" then
+		local mapData = map and map.getMap and map.getMap()
+		local node = mapData and mapData.nodes and mapData.nodes[v]
+		return node and node.pos or nil
+	end
+	if t == "table" then
+		if v.pos then
+			return toVec3ForMarkerTeleport(v.pos)
+		end
+		if v.x and v.y and v.z then
+			return vec3(v.x, v.y, v.z)
+		end
+		if #v >= 3 then
+			return vec3(v[1], v[2], v[3])
+		end
+	end
+	return nil
+end
+
+local function teleportToMapMarker()
+	if not (core_groundMarkers and core_groundMarkers.getTargetPos) then
+		return "no_marker_api"
+	end
+	local veh = be:getPlayerVehicle(0)
+	if not veh then
+		return "no_vehicle"
+	end
+	local target = core_groundMarkers.getTargetPos()
+	if not target and core_groundMarkers.endWP and core_groundMarkers.endWP[1] then
+		target = core_groundMarkers.endWP[1]
+	end
+	if not target then
+		return "no_target"
+	end
+	local targetPos = toVec3ForMarkerTeleport(target)
+	if not targetPos then
+		return "invalid_target_type:" .. tostring(type(target))
+	end
+	local x, y, z = targetPos.x, targetPos.y, targetPos.z
+	local zGround = z
+	local hit = Engine.castRay(vec3(x, y, 99999), vec3(x, y, -99999), true, true)
+	if hit and hit.pt then
+		zGround = hit.pt.z
+	end
+	local ok, err = pcall(function()
+		veh:setPositionNoPhysicsReset(vec3(x, y, zGround))
+	end)
+	if not ok then
+		return "setpos_error:" .. tostring(err)
+	end
+	return "ok"
+end
+
 local function RecieveAiMode(AiMode)
 	M.GlobalSettings.AiMode = AiMode
 end
@@ -761,5 +832,6 @@ M.onModDeactivated = uninitModMenu
 M.onModActivated = initModMenu
 M.RecieveAiMode = RecieveAiMode
 M.ToggleModMenu = ToggleModMenu
+M.teleportToMapMarker = teleportToMapMarker
 
 return M

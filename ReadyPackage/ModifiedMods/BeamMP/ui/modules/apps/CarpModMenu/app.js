@@ -9,6 +9,7 @@ angular.module('beamng.apps')
       '<md-button flex style="margin: 2px; min-width: 122px" md-no-ink class="md-raised" ng-click="unspoof()">Send Vehicle Data to Server (Unspoofer)</md-button>' +
       '<md-button flex style="margin: 2px; min-width: 122px" md-no-ink class="md-raised" ng-click="sendlicenseplate()">Send License Plate to Server</md-button>' +
       '<md-button flex style="margin: 2px; min-width: 122px" md-no-ink class="md-raised" ng-click="teleport()">Skip Mission/Teleport (Risky)</md-button>' +
+      '<md-button flex style="margin: 2px; min-width: 122px" md-no-ink class="md-raised" ng-click="teleportToMark()">TP to map marker</md-button>' +
     '</div>',
     replace: true,
     restrict: 'EA',
@@ -58,7 +59,23 @@ angular.module('beamng.apps')
           bngApi.engineLua('ui_message("Teleporting to mission cords")')
           bngApi.activeObjectLua('extensions.modmenu.teleport('+x+','+y+')');
         };
-      
+
+        // Teleport to map marker: logic lives in lua/ge/extensions/modmenumain.lua (no separate TP/TPToMark zips for git)
+        scope.teleportToMark = function () {
+          bngApi.engineLua('return modmenumain.teleportToMapMarker()', function (res) {
+            if (res === 'ok') {
+              return bngApi.engineLua("guihooks.trigger('toastrMsg',{type='success',title='TP To Mark',msg='Teleported to map marker.',config={timeOut=2500,extendedTimeOut=800}})");
+            }
+            if (res === 'no_target') {
+              return bngApi.engineLua("guihooks.trigger('toastrMsg',{type='warning',title='TP To Mark',msg='No active map marker selected.',config={timeOut=3000,extendedTimeOut=800}})");
+            }
+            if (res === 'no_vehicle') {
+              return bngApi.engineLua("guihooks.trigger('toastrMsg',{type='error',title='TP To Mark',msg='Player vehicle not found.',config={timeOut=3000,extendedTimeOut=800}})");
+            }
+            var detail = (res || 'unknown').toString().replace(/'/g, '');
+            return bngApi.engineLua("guihooks.trigger('toastrMsg',{type='error',title='TP To Mark',msg='Teleport failed: " + detail + "',config={timeOut=4500,extendedTimeOut=1000}})");
+          });
+        };
 
         scope.toggleAutoFarm = function () {
         if (scope.AutoFarm) {
