@@ -1,0 +1,18 @@
+# build output
+x64/
+Debug/
+Release/
+out/
+*.user
+*.ipch
+*.VC.db
+.vs/
+
+# generated package (published as a release zip)
+ReadyPackage/*
+!ReadyPackage/.gitkeep
+
+# loader build
+AsiLoader/build/
+AsiLoader/bin/
+Temporary/

@@ -1,0 +1,65 @@
+version: 9.{build}.0
+skip_tags: true
+image: Visual Studio 2022
+configuration: Release
+install:
+- cmd: >-
+    git submodule update --init --recursive
+
+    premake5.exe vs2022 --with-version=%APPVEYOR_BUILD_VERSION%
+build_script:
+- cmd: >-
+    msbuild build/Ultimate-ASI-Loader.sln /m /p:Configuration=Release;Platform=x64 /v:minimal
+
+    msbuild build/Ultimate-ASI-Loader.sln /m /p:Configuration=Release;Platform=Win32 /v:minimal
+test_script:
+- cmd: >-
+    bin\Win32\Release\tests\ual_unit_tests.exe
+
+    bin\x64\Release\tests\ual_unit_tests.exe
+
+    bin\Win32\Release\tests\ual_wndmode_tests.exe
+
+    bin\x64\Release\tests\ual_tests.exe
+
+    bin\Win32\Release\tests\ual_cxxsnippets_tests.exe
+
+    bin\x64\Release\tests\ual_cxxsnippets_tests.exe
+after_test:
+- pwsh: ./tools/package.ps1
+artifacts:
+- path: dist\Ultimate-ASI-Loader.zip
+  name: Ultimate-ASI-Loader.zip
+- path: dist\Ultimate-ASI-Loader_x64.zip
+  name: Ultimate-ASI-Loader_x64.zip
+- path: dist\plugins\ExeUnprotect-Win32.zip
+  name: ExeUnprotect-Win32.zip
+- path: dist\plugins\MessageBox-Win32.zip
+  name: MessageBox-Win32.zip
+- path: dist\plugins\MessageBox-x64.zip
+  name: MessageBox-x64.zip
+- path: dist\plugins\PluginTemplate-Win32.zip
+  name: PluginTemplate-Win32.zip
+- path: dist\plugins\PluginTemplate-x64.zip
+  name: PluginTemplate-x64.zip
+- path: dist\plugins\VirtualFiles-Win32.zip
+  name: VirtualFiles-Win32.zip
+- path: dist\plugins\VirtualFiles-x64.zip
+  name: VirtualFiles-x64.zip
+- path: dist\plugins\FrameLimiter-Win32.zip
+  name: FrameLimiter-Win32.zip
+- path: dist\plugins\FrameLimiter-x64.zip
+  name: FrameLimiter-x64.zip
+- path: dist\plugins\VirtualFileServer-x64.zip
+  name: VirtualFileServer-x64.zip
+deploy:
+- provider: GitHub
+  tag: demo-plugins
+  release: Ultimate ASI Loader Demo Plugins
+  description: Demo plugins to test or extend Ultimate ASI Loader's functionality.
+  auth_token:
+    secure: ugbti+bXX/7zqu39OyiPxgRPd2pQn2FEV/12ABees2fHfpZob0tWXzqD/zSYmibJ
+  artifact: ExeUnprotect-Win32.zip, MessageBox-Win32.zip, MessageBox-x64.zip, PluginTemplate-Win32.zip, PluginTemplate-x64.zip, VirtualFiles-Win32.zip, VirtualFiles-x64.zip, FrameLimiter-Win32.zip, FrameLimiter-x64.zip, VirtualFileServer-x64.zip
+  force_update: true
+  on:
+    branch: master
