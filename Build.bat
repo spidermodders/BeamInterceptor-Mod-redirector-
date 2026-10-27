@@ -98,7 +98,8 @@ del /q "%MODS%\*.md" "%MODS%\Test.txt" 2>nul
 if not exist "%ROOT%\out" mkdir "%ROOT%\out"
 set ZIP=%ROOT%\out\BeamInterceptor-%VERSION%.zip
 if exist "%ZIP%" del "%ZIP%"
-"%TAR%" -a -cf "%ZIP%" -C "%PKG%" . || exit /b 1
+:: Named items, not ".": "./" entry names make Windows Explorer call the zip invalid.
+"%TAR%" -a -cf "%ZIP%" -C "%PKG%" BeamInterceptor.asi version.dll Interceptor.config ModifiedMods || exit /b 1
 echo Package: %PKG%
 echo Zip:     %ZIP%
 exit /b 0
